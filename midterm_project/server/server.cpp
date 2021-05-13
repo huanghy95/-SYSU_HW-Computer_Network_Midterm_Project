@@ -12,6 +12,8 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <sys/time.h>
+
 
 using namespace std;
 
@@ -19,11 +21,22 @@ using namespace std;
 #define BUFFER_SIZE 1024
 #define FILE_NAME_MAX_SIZE 512
 
+double start, stop;
+
+// 用于计算时刻
+#define GET_TIME(now)                           \
+    {                                           \
+        struct timeval t;                       \
+        gettimeofday(&t, NULL);                 \
+        now = t.tv_sec + t.tv_usec / 1000000.0; \
+    }
+
+
 /* 包头 */
 typedef struct
 {
-    int id;
-    int buf_size;
+    int32_t id;
+    int32_t buf_size;
     int16_t fin;
 } PackInfo;
 
@@ -39,7 +52,7 @@ struct SendPack {
  * @param server_socket_fd  socket描述符
  * @return void
  */
-void Setup_ServerAndSocket_Server(struct sockaddr_in& server_addr, int& server_socket_fd) {
+void Setup_ServerAndSocket_Server(struct sockaddr_in& server_addr, int32_t& server_socket_fd) {
     bzero(&server_addr, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -62,8 +75,8 @@ void Setup_ServerAndSocket_Server(struct sockaddr_in& server_addr, int& server_s
  * @param file_name 要创建打开的文件名
  * @return File* 返回对应文件指针
  */
-FILE* Create_And_Open_File(const string& file_name) {
-    FILE* fp = fopen(file_name.c_str(), "w");
+FILE* Create_And_Open_File(char* file_name) {
+    FILE* fp = fopen(file_name, "w");
     if (NULL == fp) {
         printf("File:\t%s Can Not Open To Write\n", file_name);
     }
@@ -79,9 +92,9 @@ FILE* Create_And_Open_File(const string& file_name) {
  * @param fp    文件指针
  * @return void
  */
-void Listening(const struct sockaddr_in& server_addr, const int client_socket_fd, socklen_t& server_addr_length, char* file_name, FILE* fp) {
-    int id = 1;
-    int len = 0;
+void Listening(const struct sockaddr_in& server_addr, const int32_t client_socket_fd, socklen_t& server_addr_length, char* file_name, FILE* fp) {
+    int32_t id = 1;
+    int32_t len = 0;
     while (1) {
         PackInfo pack_info;
 
@@ -129,11 +142,10 @@ void Listening(const struct sockaddr_in& server_addr, const int client_socket_fd
  */
 
 int main() {
-
     /* 创建UDP套接口 */
     struct sockaddr_in server_addr;
     /* 创建socket */
-    int server_socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int32_t server_socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
 
     Setup_ServerAndSocket_Server(server_addr, server_socket_fd);
 
@@ -151,6 +163,14 @@ int main() {
             exit(1);
         }
 
+        // /* 接收数据 */
+        // char buffer[BUFFER_SIZE];
+        // bzero(buffer, BUFFER_SIZE);
+        // if (recvfrom(server_socket_fd, (char*)&data, BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &client_addr_length) == -1) {
+        //     perror("Receive Data Failed:");
+        //     exit(1);
+        // }
+
         /* 从buffer中拷贝出file_name */
         char file_name[FILE_NAME_MAX_SIZE + 1];
         bzero(file_name, FILE_NAME_MAX_SIZE + 1);
@@ -162,9 +182,8 @@ int main() {
 
         Listening(client_addr, server_socket_fd, client_addr_length, file_name, fp);
 
-        printf("Receive File:\t%s From Server IP Successful!\n", file_name);
+        printf("Receive File:\t%s From Client IP Successful!\n", file_name);
         fclose(fp);
-        
     }
     close(server_socket_fd);
     return 0;

@@ -12,6 +12,8 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <sys/time.h>
+
 
 using namespace std;
 
@@ -19,14 +21,28 @@ using namespace std;
 #define BUFFER_SIZE 1024
 #define FILE_NAME_MAX_SIZE 512
 #define FILE_NAME_MAX_SIZE 512
-const char* server_ip = "172.19.5.182";
+const char* server_ip = "192.168.43.14";
+
+
+double start, stop;
+int cnt = 0;
+
+// 用于计算时刻
+#define GET_TIME(now)                           \
+    {                                           \
+        struct timeval t;                       \
+        gettimeofday(&t, NULL);                 \
+        now = t.tv_sec + t.tv_usec / 1000000.0; \
+    }
+
 
 /* 包头 */
 typedef struct
 {
-    int id;
-    int buf_size;
+    int32_t id;
+    int32_t buf_size;
     int16_t fin;
+    int16_t syn;
 } PackInfo;
 
 /* 接收包 */
@@ -42,7 +58,7 @@ struct RecvPack {
  * @param client_socket_fd  Socket的文件描述符
  * @return void
  */
-void Setup_ServerAndSocket_Cilent(struct sockaddr_in& server_addr, socklen_t& server_addr_length, int client_socket_fd) {
+void Setup_ServerAndSocket_Cilent(struct sockaddr_in& server_addr, socklen_t& server_addr_length, int32_t client_socket_fd) {
     bzero(&server_addr, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = inet_addr(server_ip);
@@ -63,9 +79,19 @@ void Setup_ServerAndSocket_Cilent(struct sockaddr_in& server_addr, socklen_t& se
  * @param fp    文件指针
  * @return void
  */
-void Post(int server_socket_fd, struct sockaddr_in& client_addr, socklen_t& client_addr_length, FILE* fp) {
-    int len = 0;
-    int receive_id = 0, send_id = 0;
+void Post(int32_t server_socket_fd, struct sockaddr_in& client_addr, socklen_t& client_addr_length, FILE* fp) {
+    int32_t len = 0;
+    int32_t receive_id = 0, send_id = 0;
+
+    /*  sockopt使能设置超时重传 */
+    struct timeval timeout;
+    timeout.tv_sec = 0;   //秒
+    timeout.tv_usec = 10000;  //微秒
+    if (setsockopt(server_socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1) {
+        cerr << "setsockopt failed:" << endl;
+        exit(EXIT_FAILURE);
+    }
+
     /* 每读取一段数据，便将其发给客户端 */
     while (1) {
         PackInfo pack_info;
@@ -76,12 +102,27 @@ void Post(int server_socket_fd, struct sockaddr_in& client_addr, socklen_t& clie
                 data.head.id = send_id;   /* 发送id放进包头,用于标记顺序 */
                 data.head.buf_size = len; /* 记录数据长度 */
                 data.head.fin = 0;
+                cout << "data_size : " << sizeof(data) << endl;
+                GET_TIME(start);
                 if (sendto(server_socket_fd, (char*)&data, sizeof(data), 0, (struct sockaddr*)&client_addr, client_addr_length) < 0) {
                     perror("Send File Failed:");
                     break;
                 }
                 /* 接收确认消息 */
-                recvfrom(server_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, (struct sockaddr*)&client_addr, &client_addr_length);
+                // recvfrom(server_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, (struct sockaddr*)&client_addr, &client_addr_length);
+                int ret;
+                if ((ret = recvfrom(server_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, (struct sockaddr*)&client_addr, &client_addr_length)) < 0) {
+                    if (ret == EWOULDBLOCK || ret == EAGAIN) {
+                        cerr << "recvfrom timeout" << endl;
+                        continue;
+                    } else {
+                        cerr << "recvfrom err:" << ret << endl;
+                        continue;
+                    }
+                }
+                GET_TIME(stop);
+                cout << "RTT : " << stop - start << endl;
+                cout << "N0: " << ++cnt << endl;
                 receive_id = pack_info.id;
             } else {
                 data.head.fin = 1;  // 挥手包，表示文件传输结束
@@ -93,6 +134,7 @@ void Post(int server_socket_fd, struct sockaddr_in& client_addr, socklen_t& clie
             }
         } else {
             /* 如果接收的id和发送的id不相同,重新发送 */
+            cout << "------resending------" << endl;
             if (sendto(server_socket_fd, (char*)&data, sizeof(data), 0, (struct sockaddr*)&client_addr, client_addr_length) < 0) {
                 perror("Send File Failed:");
                 break;
@@ -105,19 +147,19 @@ void Post(int server_socket_fd, struct sockaddr_in& client_addr, socklen_t& clie
 }
 
 int main() {
-    int id = 1;
+    int32_t id = 1;
 
     /* 变量声明 */
-    struct sockaddr_in server_addr;                         // 服务端地址
-    socklen_t server_addr_length = sizeof(server_addr);     // 服务端地址长度
-    int client_socket_fd = socket(AF_INET, SOCK_DGRAM, 0);  // 创建套接字，第二个参数代表类型为UDP
+    struct sockaddr_in server_addr;                             // 服务端地址
+    socklen_t server_addr_length = sizeof(server_addr);         // 服务端地址长度
+    int32_t client_socket_fd = socket(AF_INET, SOCK_DGRAM, 0);  // 创建套接字，第二个参数代表类型为UDP
 
     Setup_ServerAndSocket_Cilent(server_addr, server_addr_length, client_socket_fd);  // 创建服务器和套接字
 
     /* 输入文件名到缓冲区 */
     char file_name[FILE_NAME_MAX_SIZE + 1];
     bzero(file_name, FILE_NAME_MAX_SIZE + 1);
-    printf("Please Input File Name On Server: ");
+    printf("Please Input File Name On Client: ");
     scanf("%s", file_name);
 
     char buffer[BUFFER_SIZE];

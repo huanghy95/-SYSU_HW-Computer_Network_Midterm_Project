@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <stdarg.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <algorithm>
@@ -12,8 +13,6 @@
 #include <cstring>
 #include <iostream>
 #include <string>
-#include <sys/time.h>
-
 
 using namespace std;
 
@@ -31,13 +30,13 @@ double start, stop;
         now = t.tv_sec + t.tv_usec / 1000000.0; \
     }
 
-
 /* 包头 */
 typedef struct
 {
     int32_t id;
     int32_t buf_size;
     int16_t fin;
+    int16_t syn;
 } PackInfo;
 
 /* 接收包 */
@@ -88,19 +87,35 @@ FILE* Create_And_Open_File(char* file_name) {
  * @param server_addr   发送方服务地址，UDP套接口
  * @param client_socket_fd  Socket的文件描述符
  * @param server_addr_length    发送方地址长度
- * @param file_name 文件名
- * @param fp    文件指针
  * @return void
  */
-void Listening(const struct sockaddr_in& server_addr, const int32_t client_socket_fd, socklen_t& server_addr_length, char* file_name, FILE* fp) {
+void Listening(const struct sockaddr_in& server_addr, const int32_t client_socket_fd, socklen_t& server_addr_length) {
     int32_t id = 1;
     int32_t len = 0;
+    char file_name[FILE_NAME_MAX_SIZE + 1];
+    bzero(file_name, FILE_NAME_MAX_SIZE + 1);
+    FILE* fp;
+
+    /*  sockopt使能设置超时重传 */
+    struct timeval timeout;
+    timeout.tv_sec = 10;  //秒
+    timeout.tv_usec = 0;  //微秒
+    if (setsockopt(client_socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1) {
+        cerr << "setsockopt failed:" << endl;
+        exit(EXIT_FAILURE);
+    }
+
     while (1) {
         PackInfo pack_info;
 
         if ((len = recvfrom(client_socket_fd, (char*)&data, sizeof(data), 0, (struct sockaddr*)&server_addr, &server_addr_length)) > 0) {
             if (data.head.fin == 1) {
-                break;
+                printf("Receive File:\t%s From Client IP Successful!\n", file_name);
+                fclose(fp);
+                id = 1;
+                len = 0;
+                bzero(file_name, FILE_NAME_MAX_SIZE + 1);
+                fp = NULL;
             }
             if (data.head.id == id) {
                 pack_info.id = data.head.id;
@@ -110,10 +125,22 @@ void Listening(const struct sockaddr_in& server_addr, const int32_t client_socke
                 if (sendto(client_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                     printf("Send confirm information failed!");
                 }
+                /*  如果是握手包    */
+                if (data.head.syn == 1) {
+                    /*  从第一个包中读出文件名  */
+                    strncpy(file_name, data.buf, strlen(data.buf) > FILE_NAME_MAX_SIZE ? FILE_NAME_MAX_SIZE : strlen(data.buf));
+                    printf("%s\n", file_name);
+                    /*  打开文件    */
+                    fp = Create_And_Open_File(file_name);
+                }
                 /* 写入文件 */
-                if (fwrite(data.buf, sizeof(char), data.head.buf_size, fp) < data.head.buf_size) {
+                else if (fwrite(data.buf, sizeof(char), data.head.buf_size, fp) < data.head.buf_size) {
                     printf("File:\t%s Write Failed\n", file_name);
-                    break;
+                    fclose(fp);
+                    id = 1;
+                    len = 0;
+                    bzero(file_name, FILE_NAME_MAX_SIZE + 1);
+                    fp = NULL;
                 }
             } else if (data.head.id < id) /* 如果是重发的包 */
             {
@@ -126,7 +153,14 @@ void Listening(const struct sockaddr_in& server_addr, const int32_t client_socke
             } else {
             }
         } else {
-            break;
+            if (fp == NULL)
+                continue;
+            printf("Time Exceeded! Close File!\n");
+            fclose(fp);
+            id = 1;
+            len = 0;
+            bzero(file_name, FILE_NAME_MAX_SIZE + 1);
+            fp = NULL;
         }
     }
     return;
@@ -150,41 +184,13 @@ int main() {
     Setup_ServerAndSocket_Server(server_addr, server_socket_fd);
 
     /* 数据传输 */
-    while (1) {
-        /* 定义一个地址，用于捕获客户端地址 */
-        struct sockaddr_in client_addr;
-        socklen_t client_addr_length = sizeof(client_addr);
 
-        /* 接收数据 */
-        char buffer[BUFFER_SIZE];
-        bzero(buffer, BUFFER_SIZE);
-        if (recvfrom(server_socket_fd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &client_addr_length) == -1) {
-            perror("Receive Data Failed:");
-            exit(1);
-        }
+    /* 定义一个地址，用于捕获客户端地址 */
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_length = sizeof(client_addr);
 
-        // /* 接收数据 */
-        // char buffer[BUFFER_SIZE];
-        // bzero(buffer, BUFFER_SIZE);
-        // if (recvfrom(server_socket_fd, (char*)&data, BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &client_addr_length) == -1) {
-        //     perror("Receive Data Failed:");
-        //     exit(1);
-        // }
+    Listening(client_addr, server_socket_fd, client_addr_length);
 
-        /* 从buffer中拷贝出file_name */
-        char file_name[FILE_NAME_MAX_SIZE + 1];
-        bzero(file_name, FILE_NAME_MAX_SIZE + 1);
-        strncpy(file_name, buffer, strlen(buffer) > FILE_NAME_MAX_SIZE ? FILE_NAME_MAX_SIZE : strlen(buffer));
-        printf("%s\n", file_name);
-
-        /* 打开文件 */
-        FILE* fp = Create_And_Open_File(file_name);
-
-        Listening(client_addr, server_socket_fd, client_addr_length, file_name, fp);
-
-        printf("Receive File:\t%s From Client IP Successful!\n", file_name);
-        fclose(fp);
-    }
     close(server_socket_fd);
     return 0;
 }

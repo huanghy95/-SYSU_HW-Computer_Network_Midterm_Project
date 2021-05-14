@@ -17,11 +17,10 @@
 
 using namespace std;
 
-#define SERVER_PORT 8000
-#define BUFFER_SIZE 1024
-#define FILE_NAME_MAX_SIZE 512
-#define FILE_NAME_MAX_SIZE 512
-const char* server_ip = "172.19.5.118";
+#define SERVER_PORT 8000                 // 服务端口
+#define BUFFER_SIZE 1024                 // 数据段长度
+#define FILE_NAME_MAX_SIZE 512           // 文件名最大长度
+const char* server_ip = "172.19.30.103";  // 服务端IP
 
 // 用于计算时刻
 #define GET_TIME(now)                           \
@@ -31,20 +30,20 @@ const char* server_ip = "172.19.5.118";
         now = t.tv_sec + t.tv_usec / 1000000.0; \
     }
 
-/* 包头 */
+/* 报头 */
 typedef struct
 {
-    int32_t id;
-    int32_t buf_size;
-    int16_t fin;
-    int16_t syn;
-} PackInfo;
+    int32_t id;        // 报文id
+    int32_t buf_size;  // 数据部分长度
+    int16_t fin;       // 结束标志符
+    int16_t syn;       // 建立连接请求标志符
+} PacketHead;
 
-/* 接收包 */
-struct RecvPack {
-    PackInfo head;
+/* 数据包 */
+struct Packet {
+    PacketHead head;
     char buf[BUFFER_SIZE];
-} data;
+} packet;
 
 /**
  * @brief 创建Server和Socket
@@ -53,7 +52,7 @@ struct RecvPack {
  * @param client_socket_fd  Socket的文件描述符
  * @return void
  */
-void Setup_ServerAndSocket_Cilent(struct sockaddr_in& server_addr, socklen_t& server_addr_length, int32_t& client_socket_fd) {
+void Setup_ServerAndSocket_Client(struct sockaddr_in& server_addr, socklen_t& server_addr_length, int32_t& client_socket_fd) {
     bzero(&server_addr, sizeof(server_addr));
     server_addr.sin_family = AF_INET;                    // 设置地址族
     server_addr.sin_addr.s_addr = inet_addr(server_ip);  // 装入服务端ip地址
@@ -94,7 +93,7 @@ void Post(int32_t client_socket_fd, struct sockaddr_in& server_addr, socklen_t& 
 
     /* 每读取一段数据，便将其发给客户端 */
     while (1) {
-        PackInfo pack_info;  // 报头，用于接收服务端传来的ACK
+        PacketHead ack;  // 报头，用于接收服务端传来的ACK
 
         if (receive_id == send_id) {  // 如果接收到了上一个包的ACK，才继续发送下一个包
             ++send_id;                // 已发送包的数量加一
@@ -103,27 +102,27 @@ void Post(int32_t client_socket_fd, struct sockaddr_in& server_addr, socklen_t& 
                 fp = fopen(file_name, "r");
                 /* 异常处理：没有此文件 */
                 if (NULL == fp) {
-                    cout << "File:" << file_name << " Not Found. Please Enter a Existed File" << endl;
+                    cout << "File:" << file_name << " Not Found. Please Enter an Existed File" << endl;
                     exit(EXIT_FAILURE);
                 }
-                bzero(data.buf, BUFFER_SIZE);
+                bzero(packet.buf, BUFFER_SIZE);
                 /*  将文件名存入buffer内    */
-                strncpy(data.buf, file_name, strlen(file_name) > BUFFER_SIZE ? BUFFER_SIZE : strlen(file_name));
+                strncpy(packet.buf, file_name, strlen(file_name) > BUFFER_SIZE ? BUFFER_SIZE : strlen(file_name));
                 /* 将要发送的信息打包到报文头部 */
-                data.head.id = send_id;
-                data.head.buf_size = BUFFER_SIZE;
-                data.head.fin = 0;
-                data.head.syn = 1;
-                cout << "data_size : " << sizeof(data) << endl;
+                packet.head.id = send_id;
+                packet.head.buf_size = BUFFER_SIZE;
+                packet.head.fin = 0;
+                packet.head.syn = 1;
+                cout << "data_size : " << sizeof(packet) << endl;
                 GET_TIME(start);
                 /*   发送报文到接收端   */
-                if (sendto(client_socket_fd, (char*)&data, sizeof(data), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
+                if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                     cerr << "Send File Failed:" << endl;  // 异常处理：sendto函数调用失败
                     exit(EXIT_FAILURE);
                 }
                 int ret;  // 存recvfrom返回值
                 /*  尝试接收接收方发来的ACK */
-                if ((ret = recvfrom(client_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, (struct sockaddr*)&server_addr, &server_addr_length)) < 0) {
+                if ((ret = recvfrom(client_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&server_addr, &server_addr_length)) < 0) {
                     cerr << "----TIME OUT----" << endl;  // 超时，准备重传
                     continue;
                 }
@@ -131,24 +130,24 @@ void Post(int32_t client_socket_fd, struct sockaddr_in& server_addr, socklen_t& 
                 cout << "RTT : " << stop - start << endl;
                 cout << "N0: " << send_id << endl;
                 /* 更新receive_id */
-                receive_id = pack_info.id;
+                receive_id = ack.id;
                 /* 以只读方式打开文件 */
-            } else if ((len = fread(data.buf, sizeof(char), BUFFER_SIZE, fp)) > 0) {
-                data.head.id = send_id;    // 发送id放进包头,用于标记顺序
-                data.head.buf_size = len;  // 记录数据长度
-                data.head.fin = 0;         // 不是挥手包
-                data.head.syn = 0;         // 不是握手包
-                cout << "data_size : " << sizeof(data) << endl;
+            } else if ((len = fread(packet.buf, sizeof(char), BUFFER_SIZE, fp)) > 0) {
+                packet.head.id = send_id;    // 发送id放进包头,用于标记顺序
+                packet.head.buf_size = len;  // 记录数据长度
+                packet.head.fin = 0;         // 不是挥手包
+                packet.head.syn = 0;         // 不是握手包
+                cout << "data_size : " << sizeof(packet) << endl;
                 GET_TIME(start);
                 /*   发送报文到接收端   */
-                if (sendto(client_socket_fd, (char*)&data, sizeof(data), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
+                if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                     cerr << "Send File Failed:" << endl;  // 异常处理：sendto函数调用失败
                     fclose(fp);
                     exit(EXIT_FAILURE);
                 }
                 int ret;  // 存recvfrom返回值
                 /*  尝试接收接收方发来的ACK */
-                if ((ret = recvfrom(client_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, (struct sockaddr*)&server_addr, &server_addr_length)) < 0) {
+                if ((ret = recvfrom(client_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&server_addr, &server_addr_length)) < 0) {
                     cerr << "----TIME OUT----" << endl;  // 超时，准备重传
                     continue;
                 }
@@ -156,10 +155,10 @@ void Post(int32_t client_socket_fd, struct sockaddr_in& server_addr, socklen_t& 
                 cout << "RTT : " << stop - start << endl;
                 cout << "N0: " << send_id << endl;
                 /* 更新receive_id */
-                receive_id = pack_info.id;
+                receive_id = ack.id;
             } else {
-                data.head.fin = 1;  // 挥手包，表示文件传输结束
-                if (sendto(client_socket_fd, (char*)&data, sizeof(data), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
+                packet.head.fin = 1;  // 挥手包，表示文件传输结束
+                if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                     cerr << "Send File Failed!" << endl;
                     fclose(fp);
                     exit(EXIT_FAILURE);
@@ -169,14 +168,14 @@ void Post(int32_t client_socket_fd, struct sockaddr_in& server_addr, socklen_t& 
         } else {
             /* 重传 */
             cout << "------resending------" << endl;
-            if (sendto(client_socket_fd, (char*)&data, sizeof(data), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
+            if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                 cerr << "Send File Failed!" << endl;
                 fclose(fp);
                 exit(EXIT_FAILURE);
             }
             /* 接收ACK */
-            recvfrom(client_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, (struct sockaddr*)&server_addr, &server_addr_length);
-            receive_id = pack_info.id;
+            recvfrom(client_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&server_addr, &server_addr_length);
+            receive_id = ack.id;
         }
     }
     /* 关闭文件 */
@@ -192,7 +191,7 @@ int main() {
     socklen_t server_addr_length;    // 服务端地址长度
     int32_t client_socket_fd;        // 套接字
 
-    Setup_ServerAndSocket_Cilent(server_addr, server_addr_length, client_socket_fd);  // 创建服务器和套接字
+    Setup_ServerAndSocket_Client(server_addr, server_addr_length, client_socket_fd);  // 创建服务器和套接字
 
     /* 输入文件名到缓冲区 */
     char file_name[FILE_NAME_MAX_SIZE + 1];

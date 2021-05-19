@@ -25,7 +25,7 @@ using namespace std;
 #define FILE_NAME_MAX_SIZE 512  // 文件名最大长度
 #define LENGTH 1024
 
-const char* server_ip = "192.168.43.218";  // 服务端IP
+const char* server_ip = "172.26.40.255";  // 服务端IP
 
 set<int> s;
 
@@ -176,6 +176,7 @@ void* Post(void* arg) {
                     // receive_id = ack.id;
                 } else {
                     packet.head.fin = 1;  // 挥手包，表示文件传输结束
+                    packet.head.id = i;
                     cout << "final--------=========" << endl;
                     if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                         cerr << "Send File Failed!" << endl;
@@ -188,6 +189,9 @@ void* Post(void* arg) {
                     // sem_post(&sem2);
                     cout << "flag : +++++++++++++++++++++++++++++++++++++++++++++++++++++++" << FLAG << endl;
                     // cout << "finish:" << finish << endl;
+                    cout << "start_sleep ---------" << endl;
+                    sleep(1);
+                    cout << "stop_sleep ---------" << endl;
                     break;
                 }
             }

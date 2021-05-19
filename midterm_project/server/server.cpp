@@ -21,6 +21,18 @@ using namespace std;
 #define BUFFER_SIZE 1024        // 数据段长度
 #define FILE_NAME_MAX_SIZE 512  // 文件名最大长度
 
+char text_buf[100000][BUFFER_SIZE];
+bool book[100000];
+int max_length = -1;
+int tot = 0;
+int buflen[100000];
+
+void my_strncpy(char* s1, char* s2, int len) {
+    for (int i = 0; i < len; ++i) {
+        s1[i] = s2[i];
+    }
+}
+
 // 用于计算时刻
 #define GET_TIME(now)                           \
     {                                           \
@@ -114,14 +126,20 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
         PacketHead ack;
 
         if ((len = recvfrom(server_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&client_addr, &client_addr_length)) > 0) {
-            /* 如果是挥手包，则关闭文件 */
-
             cout << "==========>"
                  << ": Pack_Id :" << packet.head.id << " ID : " << id << endl;
-            if (packet.head.id == id) {
-                if (packet.head.fin == 1) {
+            /* 如果是挥手包，则关闭文件 */
+            if (packet.head.fin == 1) {
+                max_length = packet.head.id;
+                cout << "!!!!!!!!!!!!!!!!!!!!!!----------- length : " << max_length << " tot : " << tot << endl;
+                if (max_length > 0 && tot == max_length - 2) {
+                    for (int i = 2; i < max_length; ++i) {
+                        // cout << "i : " << i << " text: " << text_buf[i] << " size : " << buflen[i] << endl;
+                        fwrite(text_buf[i], sizeof(char), buflen[i], fp);
+                    }
                     fclose(fp);
                     GET_TIME(stop);
+                    cout << "1.tot:" << tot << endl;
                     cout << "Receive File:\t" << file_name << " From Client IP Successful!" << endl;
                     cout << "Time Spending for Receiving:\t" << stop - start << endl;
                     /* 初始化各变量，等待下一个文件写入 */
@@ -129,65 +147,108 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
                     len = 0;
                     bzero(file_name, FILE_NAME_MAX_SIZE + 1);
                     fp = NULL;
-                    continue;
+                    max_length = -1;
+                    memset(text_buf, 0, sizeof(text_buf));
+                    memset(book, 0, sizeof(book));
+                    tot = 0;
                 }
-                /* 打包ACK信息 */
-                ack.id = packet.head.id;
-                ack.buf_size = packet.head.buf_size;
-                ack.syn = packet.head.syn;
-                ack.fin = packet.head.fin;
-                ++id;  // 待接收包的id++
-                /* 发送数据包确认信息ACK */
-                if (sendto(server_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&client_addr, client_addr_length) < 0) {
-                    cerr << "Send confirm information failed!" << endl;
+                // sleep(0.1);
+                // fclose(fp);
+                // GET_TIME(stop);
+                // cout << "Receive File:\t" << file_name << " From Client IP Successful!" << endl;
+                // cout << "Time Spending for Receiving:\t" << stop - start << endl;
+                // /* 初始化各变量，等待下一个文件写入 */
+                // id = 1;
+                // len = 0;
+                // bzero(file_name, FILE_NAME_MAX_SIZE + 1);
+                // fp = NULL;
+                continue;
+            }
+            /* 打包ACK信息 */
+            if (id == 1 && packet.head.syn != 1) continue;
+            ack.id = packet.head.id;
+            ack.buf_size = packet.head.buf_size;
+            ack.syn = packet.head.syn;
+            ack.fin = packet.head.fin;
+            ++id;  // 待接收包的id++
+            /* 发送数据包确认信息ACK */
+            if (sendto(server_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&client_addr, client_addr_length) < 0) {
+                cerr << "Send confirm information failed!" << endl;
+            }
+            cout << "<<<<<<<<<<<<<<<<<<<" << ack.id << endl;
+            /*  如果是握手包  */
+            if (packet.head.syn == 1) {
+                /*  从第一个包中读出文件名  */
+                if (fp == NULL) {
+                    strncpy(file_name, packet.buf, strlen(packet.buf) > FILE_NAME_MAX_SIZE ? FILE_NAME_MAX_SIZE : strlen(packet.buf));
+                    /*  打开文件    */
+                    fp = Create_And_Open_File(file_name);
+                    cout << "Ready to Receive File:\t" << file_name << endl;
+                    GET_TIME(start);
                 }
-                cout << "<<<<<<<<<<<<<<<<<<<" << ack.id << endl;
-                /*  如果是握手包  */
-                if (packet.head.syn == 1) {
-                    /*  从第一个包中读出文件名  */
-                    if (fp == NULL) {
-                        strncpy(file_name, packet.buf, strlen(packet.buf) > FILE_NAME_MAX_SIZE ? FILE_NAME_MAX_SIZE : strlen(packet.buf));
-                        /*  打开文件    */
-                        fp = Create_And_Open_File(file_name);
-                        cout << "Ready to Receive File:\t" << file_name << endl;
-                        GET_TIME(start);
+            }
+            /* 写入文件 */
+            else {
+                // fwrite(packet.buf, sizeof(char), packet.head.buf_size, fp);
+                if (book[packet.head.id] == 0) {
+                    bzero(text_buf[packet.head.id], BUFFER_SIZE);
+                    my_strncpy(text_buf[packet.head.id], packet.buf, packet.head.buf_size);
+                    buflen[packet.head.id] = packet.head.buf_size;
+                    book[packet.head.id] = 1;
+                    tot++;
+                    if (max_length > 0 && tot == max_length - 2) {
+                        for (int i = 2; i < max_length; ++i) {
+                            fwrite(text_buf[i], sizeof(char), buflen[i], fp);
+                        }
+                        fclose(fp);
+                        GET_TIME(stop);
+                        cout << "Receive File:\t" << file_name << " From Client IP Successful!" << endl;
+                        cout << "Time Spending for Receiving:\t" << stop - start << endl;
+                        cout << "2. tot:" << tot << endl;
+                        /* 初始化各变量，等待下一个文件写入 */
+                        id = 1;
+                        len = 0;
+                        bzero(file_name, FILE_NAME_MAX_SIZE + 1);
+                        fp = NULL;
+                        max_length = -1;
+                        memset(text_buf, 0, sizeof(text_buf));
+                        memset(book, 0, sizeof(book));
+                        tot = 0;
                     }
                 }
-                /* 写入文件 */
-                else if (fwrite(packet.buf, sizeof(char), packet.head.buf_size, fp) < packet.head.buf_size) {
-                    cerr << "File:\t" << file_name << " Write Failed" << endl;
-                    fclose(fp);
-                    /* 初始化各变量，等待下一个文件写入 */
-                    id = 1;
-                    len = 0;
-                    bzero(file_name, FILE_NAME_MAX_SIZE + 1);
-                    fp = NULL;
-                }
-            } else if (packet.head.id < id) /* 如果是重发的包 */
-            {
-                ack.id = packet.head.id;
-                ack.buf_size = packet.head.buf_size;
-                /* 重发对应ACK */
-                if (sendto(server_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&client_addr, client_addr_length) < 0) {
-                    cerr << "Send confirm information failed!" << endl;
-                }
-                cout << "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr" << ack.id << endl;
+                // cerr << "File:\t" << file_name << " Write Failed" << endl;
+                // fclose(fp);
+                // /* 初始化各变量，等待下一个文件写入 */
+                // id = 1;
+                // len = 0;
+                // bzero(file_name, FILE_NAME_MAX_SIZE + 1);
+                // fp = NULL;
             }
+
         } else {
             /* 如果此时没有文件被打开，则继续监听即可 */
             if (fp == NULL)
                 continue;
             /* 若超过时间限制后检测到有文件被打开，但没有收到挥手包使其被关闭，则将其关闭 */
             // cout << "Time Exceeded! Close File!" << endl;
+            cout << "3. tot: " << tot << endl;
+            for (int i = 2; i < max_length; ++i) {
+                fwrite(text_buf[i], sizeof(char), buflen[i], fp);
+            }
             fclose(fp);
             GET_TIME(stop);
             cout << "Receive File:\t" << file_name << " From Client IP Successful!" << endl;
             cout << "Time Spending for Receiving:\t" << stop - start << endl;
+            cout << "tot : " << tot << endl;
             /* 初始化各变量，等待下一个文件写入 */
             id = 1;
             len = 0;
             bzero(file_name, FILE_NAME_MAX_SIZE + 1);
             fp = NULL;
+            max_length = -1;
+            memset(text_buf, 0, sizeof(text_buf));
+            memset(book, 0, sizeof(book));
+            tot = 0;
         }
     }
     return;

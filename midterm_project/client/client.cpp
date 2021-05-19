@@ -15,21 +15,18 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
-#include <set>
 #include <string>
 
 using namespace std;
 
-#define SERVER_PORT 8000        // 服务端口
-#define BUFFER_SIZE 1024        // 数据段长度
-#define FILE_NAME_MAX_SIZE 512  // 文件名最大长度
-#define LENGTH 1024
+#define SERVER_PORT 8000                  // 服务端口
+#define BUFFER_SIZE 1024                  // 数据段长度
+#define FILE_NAME_MAX_SIZE 512            // 文件名最大长度
+#define LENGTH 256
 
-const char* server_ip = "192.168.43.218";  // 服务端IP
+const char* server_ip = "172.19.11.160";  // 服务端IP
 
-set<int> s;
-
-// bool has_acked[10240] = {0};
+bool has_acked[10240] = {0};
 sem_t sem;
 sem_t sem2;
 int FLAG = -1;
@@ -115,96 +112,94 @@ void* Post(void* arg) {
     bool finish = 0;
     while (1) {
         bool check = 1;
-        for (int i : s) {
+        for (int i = base; i < base + LENGTH; ++i) {
             if (FLAG > 0 && i >= FLAG)
                 break;
             // cout << "3------ : " << i << endl;
 
-            // cout << "4------ : " << i << endl;
-            check = 0;
-            if (i == 1) {
-                /* 以只读方式打开文件 */
-                if (fp == NULL) {
-                    fp = fopen(file_name, "r");
-                    /* 异常处理：没有此文件 */
-                    if (NULL == fp) {
-                        cout << "File:" << file_name << " Not Found. Please Enter an Existed File" << endl;
-                        exit(EXIT_FAILURE);
+            if (has_acked[i] == 0) {
+                // cout << "4------ : " << i << endl;
+                check = 0;
+                if (i == 1) {
+                    /* 以只读方式打开文件 */
+                    if (fp == NULL) {
+                        fp = fopen(file_name, "r");
+                        /* 异常处理：没有此文件 */
+                        if (NULL == fp) {
+                            cout << "File:" << file_name << " Not Found. Please Enter an Existed File" << endl;
+                            exit(EXIT_FAILURE);
+                        }
                     }
-                }
-                bzero(packet.buf, BUFFER_SIZE);
-                /*  将文件名存入buffer内    */
-                strncpy(packet.buf, file_name, strlen(file_name) > BUFFER_SIZE ? BUFFER_SIZE : strlen(file_name));
-                /* 将要发送的信息打包到报文头部 */
-                packet.head.id = i;
-                packet.head.buf_size = BUFFER_SIZE;
-                packet.head.fin = 0;
-                packet.head.syn = 1;
-                cout << "data_size : " << sizeof(packet) << endl;
-                /*   发送报文到接收端   */
-                if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
-                    cerr << "Send File Failed:" << endl;  // 异常处理：sendto函数调用失败
-                    exit(EXIT_FAILURE);
-                }
-                // cout << "RTT : " << stop - start << endl;
-                cout << "N0: " << i << endl;
-                /* 更新receive_id */
-            } else {
-                // FILE* fp_offset = fp;
-                cout << "++++++++" << (BUFFER_SIZE * (i - 2)) << endl;
-                fseek(fp, (BUFFER_SIZE * (i - 2)), 1);
-                // cout << "--------------++++++" << fp_offset - fp << endl;
-                len = fread(packet.buf, 1, BUFFER_SIZE, fp);
-                fseek(fp, -(min(len, BUFFER_SIZE)), 1);
-                fseek(fp, -(BUFFER_SIZE * (i - 2)), 1);
-                cout << "len : " << len << " i: " << i << endl;
-                if (len > 0) {
-                    packet.head.id = i;          // 发送id放进包头,用于标记顺序
-                    packet.head.buf_size = len;  // 记录数据长度
-                    packet.head.fin = 0;         // 不是挥手包
-                    packet.head.syn = 0;         // 不是握手包
+                    bzero(packet.buf, BUFFER_SIZE);
+                    /*  将文件名存入buffer内    */
+                    strncpy(packet.buf, file_name, strlen(file_name) > BUFFER_SIZE ? BUFFER_SIZE : strlen(file_name));
+                    /* 将要发送的信息打包到报文头部 */
+                    packet.head.id = i;
+                    packet.head.buf_size = BUFFER_SIZE;
+                    packet.head.fin = 0;
+                    packet.head.syn = 1;
                     cout << "data_size : " << sizeof(packet) << endl;
                     /*   发送报文到接收端   */
                     if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                         cerr << "Send File Failed:" << endl;  // 异常处理：sendto函数调用失败
-                        fclose(fp);
                         exit(EXIT_FAILURE);
                     }
                     // cout << "RTT : " << stop - start << endl;
                     cout << "N0: " << i << endl;
-                    // /* 更新receive_id */
-                    // receive_id = ack.id;
+                    /* 更新receive_id */
                 } else {
-                    packet.head.fin = 1;  // 挥手包，表示文件传输结束
-                    cout << "final--------=========" << endl;
-                    if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
-                        cerr << "Send File Failed!" << endl;
-                        fclose(fp);
-                        exit(EXIT_FAILURE);
+                    // FILE* fp_offset = fp;
+                    cout << "++++++++" << (BUFFER_SIZE * (i - 2)) << endl;
+                    fseek(fp, (BUFFER_SIZE * (i - 2)), 1);
+                    // cout << "--------------++++++" << fp_offset - fp << endl;
+                    len = fread(packet.buf, 1, BUFFER_SIZE, fp);
+                    fseek(fp, -(min(len, BUFFER_SIZE)), 1);
+                    fseek(fp, -(BUFFER_SIZE * (i - 2)), 1);
+                    cout << "len : " << len << " i: " << i << endl;
+                    if (len > 0) {
+                        packet.head.id = i;          // 发送id放进包头,用于标记顺序
+                        packet.head.buf_size = len;  // 记录数据长度
+                        packet.head.fin = 0;         // 不是挥手包
+                        packet.head.syn = 0;         // 不是握手包
+                        cout << "data_size : " << sizeof(packet) << endl;
+                        /*   发送报文到接收端   */
+                        if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
+                            cerr << "Send File Failed:" << endl;  // 异常处理：sendto函数调用失败
+                            fclose(fp);
+                            exit(EXIT_FAILURE);
+                        }
+                        // cout << "RTT : " << stop - start << endl;
+                        cout << "N0: " << i << endl;
+                        // /* 更新receive_id */
+                        // receive_id = ack.id;
+                    } else {
+                        packet.head.fin = 1;  // 挥手包，表示文件传输结束
+                        cout << "final--------=========" << endl;
+                        if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
+                            cerr << "Send File Failed!" << endl;
+                            fclose(fp);
+                            exit(EXIT_FAILURE);
+                        }
+                        finish = 1;
+                        // sem_wait(&sem2);
+                        FLAG = i;
+                        // sem_post(&sem2);
+                        cout << "flag : +++++++++++++++++++++++++++++++++++++++++++++++++++++++" << FLAG << endl;
+                        // cout << "finish:" << finish << endl;
+                        break;
                     }
-                    finish = 1;
-                    // sem_wait(&sem2);
-                    FLAG = i;
-                    // sem_post(&sem2);
-                    cout << "flag : +++++++++++++++++++++++++++++++++++++++++++++++++++++++" << FLAG << endl;
-                    // cout << "finish:" << finish << endl;
-                    break;
                 }
             }
         }
-        if (ending)
-            return nullptr;
-        if (s.empty()) {
+        if (ending) return nullptr;
+        if (check) {
             // cout<<"fuckdsfds finish : " << finish <<endl;
             base += LENGTH;
-            for (int i = base; i < base + LENGTH; ++i) {
-                s.insert(i);
-            }
             if (finish) {
                 break;
             }
         }
-        // sleep(0.1);
+        sleep(0.05);
         // fseek(fp, (BUFFER_SIZE * 1024), 1);
     }
     /* 关闭文件 */
@@ -234,8 +229,7 @@ void* Get_ACK(void* arg) {
         // cout << "N0: " << send_id << endl;
         /* 更新receive_id */
         // sem_wait(&sem);
-        // has_acked[ack.id] = 1;
-        s.erase(ack.id);
+        has_acked[ack.id] = 1;
         // sem_post(&sem);
         cout << ">>>>>>>" << ack.id << endl;
     }
@@ -249,11 +243,6 @@ int main() {
     struct sockaddr_in server_addr;  // 服务端地址
     socklen_t server_addr_length;    // 服务端地址长度
     int32_t client_socket_fd;        // 套接字
-
-    s.clear();
-    for (int i = 1; i < 1 + LENGTH; ++i) {
-        s.insert(i);
-    }
 
     Setup_ServerAndSocket_Client(server_addr, server_addr_length, client_socket_fd);  // 创建服务器和套接字
 

@@ -103,7 +103,7 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
 
     /* 设置超时自动关闭文件的时间 */
     struct timeval timeout;
-    timeout.tv_sec = 10;  //秒
+    timeout.tv_sec = 1;   //秒
     timeout.tv_usec = 0;  //微秒
     if (setsockopt(server_socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1) {
         cerr << "setsockopt failed:" << endl;
@@ -115,18 +115,22 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
 
         if ((len = recvfrom(server_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&client_addr, &client_addr_length)) > 0) {
             /* 如果是挥手包，则关闭文件 */
-            if (packet.head.fin == 1) {
-                fclose(fp);
-                GET_TIME(stop);
-                cout << "Receive File:\t" << file_name << " From Client IP Successful!" << endl;
-                cout << "Time Spending for Receiving:\t" << stop - start << endl;
-                /* 初始化各变量，等待下一个文件写入 */
-                id = 1;
-                len = 0;
-                bzero(file_name, FILE_NAME_MAX_SIZE + 1);
-                fp = NULL;
-            }
+
+            cout << "==========>"
+                 << ": Pack_Id :" << packet.head.id << " ID : " << id << endl;
             if (packet.head.id == id) {
+                if (packet.head.fin == 1) {
+                    fclose(fp);
+                    GET_TIME(stop);
+                    cout << "Receive File:\t" << file_name << " From Client IP Successful!" << endl;
+                    cout << "Time Spending for Receiving:\t" << stop - start << endl;
+                    /* 初始化各变量，等待下一个文件写入 */
+                    id = 1;
+                    len = 0;
+                    bzero(file_name, FILE_NAME_MAX_SIZE + 1);
+                    fp = NULL;
+                    continue;
+                }
                 /* 打包ACK信息 */
                 ack.id = packet.head.id;
                 ack.buf_size = packet.head.buf_size;
@@ -137,14 +141,17 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
                 if (sendto(server_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&client_addr, client_addr_length) < 0) {
                     cerr << "Send confirm information failed!" << endl;
                 }
+                cout << "<<<<<<<<<<<<<<<<<<<" << ack.id << endl;
                 /*  如果是握手包  */
                 if (packet.head.syn == 1) {
                     /*  从第一个包中读出文件名  */
-                    strncpy(file_name, packet.buf, strlen(packet.buf) > FILE_NAME_MAX_SIZE ? FILE_NAME_MAX_SIZE : strlen(packet.buf));
-                    /*  打开文件    */
-                    fp = Create_And_Open_File(file_name);
-                    cout << "Ready to Receive File:\t" << file_name << endl;
-                    GET_TIME(start);
+                    if (fp == NULL) {
+                        strncpy(file_name, packet.buf, strlen(packet.buf) > FILE_NAME_MAX_SIZE ? FILE_NAME_MAX_SIZE : strlen(packet.buf));
+                        /*  打开文件    */
+                        fp = Create_And_Open_File(file_name);
+                        cout << "Ready to Receive File:\t" << file_name << endl;
+                        GET_TIME(start);
+                    }
                 }
                 /* 写入文件 */
                 else if (fwrite(packet.buf, sizeof(char), packet.head.buf_size, fp) < packet.head.buf_size) {
@@ -164,14 +171,18 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
                 if (sendto(server_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&client_addr, client_addr_length) < 0) {
                     cerr << "Send confirm information failed!" << endl;
                 }
+                cout << "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr" << ack.id << endl;
             }
         } else {
             /* 如果此时没有文件被打开，则继续监听即可 */
             if (fp == NULL)
                 continue;
             /* 若超过时间限制后检测到有文件被打开，但没有收到挥手包使其被关闭，则将其关闭 */
-            cout << "Time Exceeded! Close File!" << endl;
+            // cout << "Time Exceeded! Close File!" << endl;
             fclose(fp);
+            GET_TIME(stop);
+            cout << "Receive File:\t" << file_name << " From Client IP Successful!" << endl;
+            cout << "Time Spending for Receiving:\t" << stop - start << endl;
             /* 初始化各变量，等待下一个文件写入 */
             id = 1;
             len = 0;

@@ -25,7 +25,7 @@ using namespace std;
 #define FILE_NAME_MAX_SIZE 512  // 文件名最大长度
 #define LENGTH 1024
 
-const char* server_ip = "172.26.40.255";  // 服务端IP
+const char* server_ip = "172.19.52.149";  // 服务端IP
 
 set<int> s;
 

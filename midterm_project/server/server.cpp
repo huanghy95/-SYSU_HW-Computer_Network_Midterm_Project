@@ -20,12 +20,15 @@ using namespace std;
 #define SERVER_PORT 8000        // 服务端口
 #define BUFFER_SIZE 1024        // 数据段长度
 #define FILE_NAME_MAX_SIZE 512  // 文件名最大长度
+#define max_buff_size 100000
 
-char text_buf[100000][BUFFER_SIZE];
-bool book[100000];
+char text_buf[max_buff_size][BUFFER_SIZE];
+bool book[max_buff_size];
 int max_length = -1;
 int tot = 0;
-int buflen[100000];
+int buflen[max_buff_size];
+int begin_position = 2;
+int line = 10000;
 
 void my_strncpy(char* s1, char* s2, int len) {
     for (int i = 0; i < len; ++i) {
@@ -115,8 +118,8 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
 
     /* 设置超时自动关闭文件的时间 */
     struct timeval timeout;
-    timeout.tv_sec = 1;   //秒
-    timeout.tv_usec = 0;  //微秒
+    timeout.tv_sec = 1;  //秒
+    timeout.tv_usec = 0;   //微秒
     if (setsockopt(server_socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1) {
         cerr << "setsockopt failed:" << endl;
         exit(EXIT_FAILURE);
@@ -165,7 +168,8 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
                 continue;
             }
             /* 打包ACK信息 */
-            if (id == 1 && packet.head.syn != 1) continue;
+            if (id == 1 && packet.head.syn != 1)
+                continue;
             ack.id = packet.head.id;
             ack.buf_size = packet.head.buf_size;
             ack.syn = packet.head.syn;
@@ -196,6 +200,10 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
                     buflen[packet.head.id] = packet.head.buf_size;
                     book[packet.head.id] = 1;
                     tot++;
+                    // if (tot == line) {
+                    //     line += 10000;
+
+                    // }
                     if (max_length > 0 && tot == max_length - 2) {
                         for (int i = 2; i < max_length; ++i) {
                             fwrite(text_buf[i], sizeof(char), buflen[i], fp);
@@ -227,12 +235,14 @@ void Listening(const struct sockaddr_in& client_addr, const int32_t server_socke
 
         } else {
             /* 如果此时没有文件被打开，则继续监听即可 */
-            if (fp == NULL)
+            if (fp == NULL) {
+                // cout << "click" << endl;
                 continue;
+            }
             /* 若超过时间限制后检测到有文件被打开，但没有收到挥手包使其被关闭，则将其关闭 */
             // cout << "Time Exceeded! Close File!" << endl;
             cout << "3. tot: " << tot << endl;
-            for (int i = 2; i < max_length; ++i) {
+            for (int i = 2; i <= tot + 1; ++i) {
                 fwrite(text_buf[i], sizeof(char), buflen[i], fp);
             }
             fclose(fp);

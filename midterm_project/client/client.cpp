@@ -23,18 +23,16 @@ using namespace std;
 #define SERVER_PORT 8000        // 服务端口
 #define BUFFER_SIZE 1024        // 数据段长度
 #define FILE_NAME_MAX_SIZE 512  // 文件名最大长度
-#define LENGTH 1024
+#define wnd 1024                // 窗口长度
 
-const char* server_ip = "172.19.52.149";  // 服务端IP
+const char* server_ip = "172.19.35.185";  // 服务端IP
 
-set<int> s;
+set<int32_t> ready_to_send; // 要发送的包id
 
-// bool has_acked[10240] = {0};
-sem_t sem;
-sem_t sem2;
-int FLAG = -1;
-int ending = 0;
+int FLAG = -1; // 挥手包id
+int ending = 0; // 结束标记
 
+/* 参数结构体，用于向线程函数传递参数 */
 struct parameter {
     int32_t client_socket_fd;
     struct sockaddr_in server_addr;
@@ -89,7 +87,7 @@ void Setup_ServerAndSocket_Client(struct sockaddr_in& server_addr, socklen_t& se
 }
 
 /**
- * @brief 将文件分片发送到服务端
+ * @brief 将文件分片发送到服务端的线程，每次发wnd个包，如果检测到有包没有得到ack则选择重传，直到所有包都得到ack则滑动窗口，将窗口移动到后wnd个包
  * @param client_socket_fd  socket描述符
  * @param server_addr   接收方服务地址
  * @param server_addr_length   接收方服务地址长度
@@ -104,24 +102,18 @@ void* Post(void* arg) {
     const char* file_name = p->file_name;
 
     int32_t len = 0;  //  要发的文件段大小
-    // int32_t send_id = 0;  // 初始化接受包号和发送包号
     FILE* fp;  // 文件指针
-    // double start, stop;                   //  记录时刻的变量， 用于算RTT
+    int32_t base = 1;  // 每段的段首包id
+    int16_t finish = 0;  // 检查该段是否传输完成
 
-    cout << "-----2-----" << endl;
-
-    /* 每读取一段数据，便将其发给客户端 */
-    int base = 1;
-    bool finish = 0;
+    /* 每次向server发wnd个包，如果检测到有包没有得到ack则选择重传，直到所有包都得到ack则滑动窗口，将窗口移动到后wnd个包 */
     while (1) {
-        bool check = 1;
-        for (int i : s) {
+        for (int i : ready_to_send) {
+            /* 防溢出 */
             if (FLAG > 0 && i >= FLAG)
                 break;
-            // cout << "3------ : " << i << endl;
 
-            // cout << "4------ : " << i << endl;
-            check = 0;
+            /* 如果是握手包，则发送文件夹名 */
             if (i == 1) {
                 /* 以只读方式打开文件 */
                 if (fp == NULL) {
@@ -140,7 +132,7 @@ void* Post(void* arg) {
                 packet.head.buf_size = BUFFER_SIZE;
                 packet.head.fin = 0;
                 packet.head.syn = 1;
-                cout << "data_size : " << sizeof(packet) << endl;
+                // cout << "data_size : " << sizeof(packet) << endl;
                 /*   发送报文到接收端   */
                 if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                     cerr << "Send File Failed:" << endl;  // 异常处理：sendto函数调用失败
@@ -148,22 +140,24 @@ void* Post(void* arg) {
                 }
                 // cout << "RTT : " << stop - start << endl;
                 cout << "N0: " << i << endl;
-                /* 更新receive_id */
-            } else {
-                // FILE* fp_offset = fp;
-                cout << "++++++++" << (BUFFER_SIZE * (i - 2)) << endl;
+            }
+            /* 若不是握手包，则从文件中读取一个段数据存入保重并发给server */ 
+            else {
+
+                /* 文件指针偏移 */
                 fseek(fp, (BUFFER_SIZE * (i - 2)), 1);
-                // cout << "--------------++++++" << fp_offset - fp << endl;
+                /* 从文件中读取BUFFER_SIZE个Byte，作为一个包的数据 */
                 len = fread(packet.buf, 1, BUFFER_SIZE, fp);
+                /* 文件指针复原 */
                 fseek(fp, -(min(len, BUFFER_SIZE)), 1);
                 fseek(fp, -(BUFFER_SIZE * (i - 2)), 1);
-                cout << "len : " << len << " i: " << i << endl;
+                // cout << "len : " << len << " i: " << i << endl;
                 if (len > 0) {
                     packet.head.id = i;          // 发送id放进包头,用于标记顺序
                     packet.head.buf_size = len;  // 记录数据长度
                     packet.head.fin = 0;         // 不是挥手包
                     packet.head.syn = 0;         // 不是握手包
-                    cout << "data_size : " << sizeof(packet) << endl;
+                    // cout << "data_size : " << sizeof(packet) << endl;
                     /*   发送报文到接收端   */
                     if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                         cerr << "Send File Failed:" << endl;  // 异常处理：sendto函数调用失败
@@ -172,76 +166,66 @@ void* Post(void* arg) {
                     }
                     // cout << "RTT : " << stop - start << endl;
                     cout << "N0: " << i << endl;
-                    // /* 更新receive_id */
-                    // receive_id = ack.id;
                 } else {
                     packet.head.fin = 1;  // 挥手包，表示文件传输结束
                     packet.head.id = i;
-                    cout << "final--------=========" << endl;
                     if (sendto(client_socket_fd, (char*)&packet, sizeof(packet), 0, (struct sockaddr*)&server_addr, server_addr_length) < 0) {
                         cerr << "Send File Failed!" << endl;
                         fclose(fp);
                         exit(EXIT_FAILURE);
                     }
-                    finish = 1;
-                    // sem_wait(&sem2);
-                    FLAG = i;
-                    // sem_post(&sem2);
-                    cout << "flag : +++++++++++++++++++++++++++++++++++++++++++++++++++++++" << FLAG << endl;
-                    // cout << "finish:" << finish << endl;
-                    cout << "start_sleep ---------" << endl;
-                    sleep(1);
-                    cout << "stop_sleep ---------" << endl;
+                    finish = 1; // 结束标记
+                    FLAG = i; // 标记挥手包的id
+                    sleep(0.5); // 发送结束后sleep1秒，让另一个线程收完ack
                     break;
                 }
             }
         }
+        /* 如果结束，直接退出 */
         if (ending)
             return nullptr;
-        if (s.empty()) {
-            // cout<<"fuckdsfds finish : " << finish <<endl;
-            base += LENGTH;
-            for (int i = base; i < base + LENGTH; ++i) {
-                s.insert(i);
+        /* 所有包都得到ack则滑动窗口，将窗口移动到后wnd个包 */
+        if (ready_to_send.empty()) {
+            base += wnd;
+            for (int i = base; i < base + wnd; ++i) {
+                ready_to_send.insert(i);
             }
+            /* 如果结束，直接退出 */
             if (finish) {
                 break;
             }
         }
-        // sleep(0.1);
-        // fseek(fp, (BUFFER_SIZE * 1024), 1);
     }
     /* 关闭文件 */
-    // cout << "////////////////////////////" << endl;
     fclose(fp);
     return nullptr;
 }
 
+/**
+ * @brief 接受ACK的线程，每次收到server传来的ACK则将id加入has_acked中
+ * @param client_socket_fd  socket描述符
+ * @param server_addr   接收方服务地址
+ * @param server_addr_length   接收方服务地址长度
+ * @return void
+ */
 void* Get_ACK(void* arg) {
+    /* 将各个参数从arg结构体中提取出来 */
     struct parameter* p = (parameter*)arg;
     int32_t client_socket_fd = p->client_socket_fd;
     struct sockaddr_in server_addr = p->server_addr;
     socklen_t server_addr_length = p->server_addr_length;
 
+    /* 不断监听接收方传来的ack */
     while (1) {
         PacketHead ack;
         int ret;  // 存recvfrom返回值
         /*  尝试接收接收方发来的ACK */
         if ((ret = recvfrom(client_socket_fd, (char*)&ack, sizeof(ack), 0, (struct sockaddr*)&server_addr, &server_addr_length)) < 0) {
-            cerr << "----FINISH----" << endl;  // 超时，准备重传
-            ending = 1;
+            cout << "----FINISH----" << endl;  // server已经不发送ack包了，代表传输结束，退出线程
+            ending = 1;  // 代表传输结束
             return nullptr;
         }
-        // if (FLAG == 1)
-        //     return nullptr;
-        // cout << "RTT : " << stop - start << endl;
-        // cout << "N0: " << send_id << endl;
-        /* 更新receive_id */
-        // sem_wait(&sem);
-        // has_acked[ack.id] = 1;
-        s.erase(ack.id);
-        // sem_post(&sem);
-        cout << ">>>>>>>" << ack.id << endl;
+        ready_to_send.erase(ack.id); // 将id加入has_acked中
     }
 }
 
@@ -254,14 +238,14 @@ int main() {
     socklen_t server_addr_length;    // 服务端地址长度
     int32_t client_socket_fd;        // 套接字
 
-    s.clear();
-    for (int i = 1; i < 1 + LENGTH; ++i) {
-        s.insert(i);
+    ready_to_send.clear();
+    for (int i = 1; i < 1 + wnd; ++i) {
+        ready_to_send.insert(i);
     }
 
     Setup_ServerAndSocket_Client(server_addr, server_addr_length, client_socket_fd);  // 创建服务器和套接字
 
-    /*  sockopt使能设置超时重传 */
+    /*  sockopt使能设置结束时间 */
     struct timeval timeout;
     timeout.tv_sec = 1;   //秒
     timeout.tv_usec = 0;  //微秒
@@ -276,56 +260,42 @@ int main() {
     printf("Please Input File Name On Client: ");
     scanf("%s", file_name);
 
+    /* 开始计时 */
     GET_TIME(start);
-    /*  主要逻辑，向服务端传输文件    */
 
     long thread;                // 线程号
     pthread_t* thread_handles;  // 线程指针
 
-    // 为线程指针申请内存
-
+    // 总共启用两个线程
     int thread_count = 2;
 
+    // 为线程指针申请内存
     thread_handles = (pthread_t*)malloc(thread_count * sizeof(pthread_t));
 
-    sem_init(&sem, 0, 1);
-    sem_init(&sem2, 0, 1);
-
-    // 开启thread_count个线程，每个线程启用线程函数
-
+    // 打包参数结构体
     struct parameter* par = new parameter;
     par->client_socket_fd = client_socket_fd;
     par->file_name = file_name;
     par->server_addr = server_addr;
     par->server_addr_length = server_addr_length;
 
-    cout << "--------1---------" << endl;
-
+    // 开启thread_count个线程，每个线程启用线程函数
     pthread_create(&thread_handles[0], NULL, Get_ACK,
                    (void*)par);
     pthread_create(&thread_handles[1], NULL, Post,
                    (void*)par);
-    // for (thread = 0; thread < thread_count; thread++) {
-    //     struct parameter* par = new parameter;
-    //     par->rank = (void*)thread;
-    //     par->len = cnt;
-    //     par->ar = b;
-    //     pthread_create(&thread_handles[thread], NULL, Thread_work,
-    //                    (void*)par);
-    // }
 
     // 同步线程
     for (thread = 0; thread < thread_count; thread++)
         pthread_join(thread_handles[thread], NULL);
 
-    // Post(client_socket_fd, server_addr, server_addr_length, file_name);
+    /* 结束计时 */
     GET_TIME(stop);
 
     cout << "File:" << file_name << " Transfer Successful!" << endl;
     cout << "Spend " << stop - start << " Seconds for Transferring" << endl;
 
     free(thread_handles);
-    sem_destroy(&sem);
 
     /*  关闭套接字  */
     close(client_socket_fd);
